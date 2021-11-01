@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"sync"
 	"time"
@@ -43,6 +44,11 @@ func worker(
 			return
 		}
 
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("ERR: http: %v", resp.StatusCode)
+			return
+		}
+
 		_, err = ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
@@ -58,7 +64,7 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <benchmark|get>\n", os.Args[0])
 		flag.PrintDefaults()
 	}
-	script := flag.String("script", "/index.php", "script to execute")
+	script := flag.String("script", "index.php", "script to execute")
 	network := flag.String("network", "tcp", "network to dial (net or unix)")
 	address := flag.String("address", "localhost:9000", "address to dial")
 	workerCount := flag.Int("workers", 4, "number of worker goroutines")
@@ -74,7 +80,7 @@ func main() {
 	}
 
 	req := map[string]string{
-		"SCRIPT_FILENAME":   "/opt/omegaup/frontend/www" + *script,
+		"SCRIPT_FILENAME":   path.Join("/opt/omegaup/frontend/www", *script),
 		"GATEWAY_INTERFACE": "CGI/1.1",
 		"SERVER_SOFTWARE":   "go / fcgiclient",
 		"REMOTE_ADDR":       "127.0.0.1",
@@ -105,13 +111,13 @@ func main() {
 			averageLatency += latency
 			latencies = append(latencies, latency)
 		}
-		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-		averageLatency /= time.Duration(len(latencies))
 
 		log.Printf("Done sending %d requests", len(latencies))
 		if len(latencies) == 0 {
 			return
 		}
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		averageLatency /= time.Duration(len(latencies))
 		log.Printf("Mean latency: %v", averageLatency)
 		log.Printf("Min  latency: %v", latencies[0])
 		log.Printf("50th latency: %v", latencies[len(latencies)/2])
@@ -133,7 +139,7 @@ func main() {
 		}
 
 		if *verbose {
-			fmt.Fprintf(os.Stderr, "HTTP %d/%d %d\n", resp.ProtoMajor, resp.ProtoMinor, resp.StatusCode)
+			fmt.Fprintf(os.Stderr, "HTTP/%d.%d %d\n", resp.ProtoMajor, resp.ProtoMinor, resp.StatusCode)
 			for k, values := range resp.Header {
 				for _, v := range values {
 					fmt.Fprintf(os.Stderr, "%v: %v\n", k, v)
@@ -149,7 +155,7 @@ func main() {
 		}
 		os.Stdout.Write(contents)
 		if resp.StatusCode != 0 && resp.StatusCode != http.StatusOK {
-			log.Fatalf("Status code: %v", resp.StatusCode)
+			os.Exit(1)
 		}
 
 	default:

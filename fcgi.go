@@ -332,12 +332,18 @@ type streamReader struct {
 func (w *streamReader) Read(p []byte) (n int, err error) {
 
 	if len(p) > 0 {
-		if len(w.buf) == 0 {
+		for len(w.buf) == 0 {
 			rec := &record{}
-			w.buf, err = rec.read(w.c.rwc)
+			var buf []byte
+			buf, err = rec.read(w.c.rwc)
 			if err != nil {
 				return
 			}
+			if rec.h.Type != FCGI_STDOUT {
+				// Skip this record.
+				continue
+			}
+			w.buf = buf
 		}
 
 		n = len(p)
@@ -398,35 +404,6 @@ func (this *FCGIClient) Request(p map[string]string, req io.Reader) (resp *http.
 	rb := bufio.NewReader(r)
 	tp := textproto.NewReader(rb)
 	resp = new(http.Response)
-	// Parse the first line of the response.
-	line, err := tp.ReadLine()
-	if err != nil {
-		if err == io.EOF {
-			err = io.ErrUnexpectedEOF
-		}
-		return nil, err
-	}
-	if i := strings.IndexByte(line, ' '); i == -1 {
-		err = &badStringError{"malformed HTTP response", line}
-	} else {
-		resp.Proto = line[:i]
-		resp.Status = strings.TrimLeft(line[i+1:], " ")
-	}
-	statusCode := resp.Status
-	if i := strings.IndexByte(resp.Status, ' '); i != -1 {
-		statusCode = resp.Status[:i]
-	}
-	if len(statusCode) != 3 {
-		err = &badStringError{"malformed HTTP status code", statusCode}
-	}
-	resp.StatusCode, err = strconv.Atoi(statusCode)
-	if err != nil || resp.StatusCode < 0 {
-		err = &badStringError{"malformed HTTP status code", statusCode}
-	}
-	var ok bool
-	if resp.ProtoMajor, resp.ProtoMinor, ok = http.ParseHTTPVersion(resp.Proto); !ok {
-		err = &badStringError{"malformed HTTP version", resp.Proto}
-	}
 	// Parse the response headers.
 	mimeHeader, err := tp.ReadMIMEHeader()
 	if err != nil {
@@ -436,6 +413,29 @@ func (this *FCGIClient) Request(p map[string]string, req io.Reader) (resp *http.
 		return nil, err
 	}
 	resp.Header = http.Header(mimeHeader)
+	resp.StatusCode = http.StatusOK
+	resp.Status = "OK"
+	resp.ProtoMajor = 1
+	resp.ProtoMinor = 1
+	if status, ok := resp.Header["Status"]; ok {
+		delete(resp.Header, "Status")
+
+		line := status[0]
+		if i := strings.IndexByte(line, ' '); i == -1 {
+			err = &badStringError{"malformed HTTP response", line}
+		} else {
+			resp.Status = strings.Trim(line[:i+1], " ")
+			statusCode := strings.Trim(line[:i], " ")
+			if len(statusCode) != 3 {
+				err = &badStringError{"malformed HTTP status code", statusCode}
+			} else {
+				resp.StatusCode, err = strconv.Atoi(statusCode)
+				if err != nil || resp.StatusCode < 0 {
+					err = &badStringError{"malformed HTTP status code", statusCode}
+				}
+			}
+		}
+	}
 	// TODO: fixTransferEncoding ?
 	resp.TransferEncoding = resp.Header["Transfer-Encoding"]
 	resp.ContentLength, _ = strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
